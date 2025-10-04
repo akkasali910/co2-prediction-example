@@ -1,0 +1,39 @@
+graph TD
+    subgraph "A. Live Inference & Data Capture"
+        direction LR
+        User[External Client] -- "Inference Request (CSV)" --> Endpoint[SageMaker Endpoint];
+        Endpoint -- "Prediction (CSV)" --> User;
+        Endpoint -- "Logs Request & Prediction" --> DataCapture[S3 Bucket: /monitoring/data-capture];
+    end
+
+    subgraph "B. Scheduled Monitoring (Hourly)"
+        direction TB
+        Schedule[EventBridge Schedule Cron] --> DQ_Job(Data Quality Monitor Job);
+        Schedule --> Bias_Job(Model Bias Monitor Job);
+        
+        DataCapture -- "Reads Captured Data" --> DQ_Job;
+        DataCapture -- "Reads Captured Data" --> Bias_Job;
+
+        Baseline_DQ[S3 Bucket: /monitoring/data-quality<br/>statistics.json, constraints.json] -- "Reads Data Baseline" --> DQ_Job;
+        Baseline_Bias[S3 Bucket: /clarify-output<br/>analysis.json] -- "Reads Bias Baseline" --> Bias_Job;
+
+        DQ_Job -- "Generates Report" --> DQ_Report[S3 Bucket: /monitoring/reports];
+        Bias_Job -- "Generates Report" --> Bias_Report[S3 Bucket: /monitoring/bias-reports];
+    end
+
+    subgraph "C. Automated Response to Drift"
+        direction TB
+        DQ_Report -- "If Violations" --> EventBridge;
+        Bias_Report -- "If Violations" --> EventBridge;
+        
+        EventBridge[EventBridge Rule<br/>on 'CompletedWithViolations'] --> SNS[SNS Topic: Send Email Alert];
+        EventBridge --> Lambda[Lambda: Start Pipeline];
+        
+        Lambda -- "Invokes `start_pipeline_execution`" --> Pipeline[SageMaker Pipeline<br/>Pando2-CO2-Regression-Pipeline];
+    end
+
+    style Endpoint fill:#232F3E,stroke:#FF9900,stroke-width:2px,color:#fff
+    style Schedule fill:#7D7C7C,stroke:#333,stroke-width:1px,color:#fff
+    style EventBridge fill:#C41E3A,stroke:#333,stroke-width:2px,color:#fff
+    style Pipeline fill:#FF9900,stroke:#333,stroke-width:2px
+

@@ -1,0 +1,50 @@
+graph TD
+    subgraph "CI/CD & Orchestration"
+        A[Start Pipeline Execution] --> P(SageMaker Pipeline: Pando2-CO2-Regression-Pipeline);
+    end
+
+    subgraph "1. Data & Baseline Generation"
+        P --> B(1. Prepare Data);
+        B --> C(2. Check Data Quality);
+    end
+
+    subgraph "2. Model Training & Tuning"
+        C --> D(3. Tune Hyperparameters);
+        D --> E(4. Train Best Model);
+    end
+
+    subgraph "3. Model Governance & Quality Gates"
+        E --> F(5. Check for Bias & Explainability);
+        F --> G(6. Evaluate Performance);
+    end
+
+    subgraph "4. Conditional Deployment"
+        G --> H{7. R² >= 0.75?};
+        H --"Yes"--> I(8a. Register Model);
+        I --> J(8b. Deploy to Endpoint);
+        H --"No"--> K(8c. Cleanup Old Endpoint);
+    end
+
+    subgraph "5. Real-time Monitoring & Automated Retraining (Closed Loop)"
+        J --> L[SageMaker Endpoint];
+        L --> M(Capture Live Data);
+        M --> N[S3: Captured Data];
+        
+        subgraph "Hourly Monitoring Schedules"
+            O(Data Quality Monitor) --> Q{Drift?};
+            P(Bias Monitor) --> Q;
+        end
+
+        N --> O;
+        N --> P;
+        
+        Q --"Yes"--> R(EventBridge Rule);
+        R --> S(SNS: Send Alert);
+        R --> T(Lambda: Trigger Retraining);
+        T -.-> A;
+    end
+
+    style P fill:#FF9900,stroke:#333,stroke-width:2px
+    style L fill:#232F3E,stroke:#FF9900,stroke-width:2px,color:#fff
+    style R fill:#C41E3A,stroke:#333,stroke-width:2px,color:#fff
+
