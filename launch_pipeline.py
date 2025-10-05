@@ -60,6 +60,7 @@ def get_pipeline(role, pipeline_name, default_bucket):
             sagemaker.outputs.ProcessingOutput(output_name="train", source="/opt/ml/processing/output/train"),
             sagemaker.outputs.ProcessingOutput(output_name="validation", source="/opt/ml/processing/output/validation"),
             sagemaker.outputs.ProcessingOutput(output_name="test", source="/opt/ml/processing/output/test"),
+            sagemaker.outputs.ProcessingOutput(output_name="feature_count", source="/opt/ml/processing/output/feature_count"),
         ]
     )
 
@@ -147,14 +148,23 @@ def get_pipeline(role, pipeline_name, default_bucket):
         sagemaker_session=sagemaker_session,
     )
     
+    # Define a PropertyFile to read the feature count from the preprocessing step's output
+    feature_count_report = PropertyFile(
+        name="FeatureCountReport",
+        output_name="feature_count",
+        path="feature_count.json"
+    )
+    step_prepare_data.properties.ProcessingOutputConfig.Outputs["feature_count"]._set_prop_file(feature_count_report)
+    num_features = feature_count_report.properties["num_features"]
+
     # Configure Clarify to analyze the data, specifying the target label and features.
     # For bias, we'll use 'occupancy' as a facet to see if the model behaves differently
     # for different occupancy levels.
     clarify_data_config = DataConfig(
         s3_data_input_path=step_prepare_data.properties.ProcessingOutputConfig.Outputs["train"].S3Output.S3Uri,
         s3_output_path=f"s3://{default_bucket}/pando2/clarify-output",
-        label="co2", # The target variable
-        headers=[f"feature_{i}" for i in range(20)] + ["co2"], # Assuming 20 features + 1 label
+        label="CO2_PPM", # The target variable, matching preprocess.py
+        headers=[f"feature_{i}" for i in range(num_features)] + ["CO2_PPM"], # Use dynamic feature count
         dataset_type="text/csv",
     )
 
@@ -174,7 +184,7 @@ def get_pipeline(role, pipeline_name, default_bucket):
     )
 
     # Configure SHAP for explainability
-    shap_config = SHAPConfig(baseline=[[0]*20]) # Baseline with 20 features
+    shap_config = SHAPConfig(baseline=[[0]*num_features]) # Use dynamic feature count
 
     step_clarify_check = ClarifyCheckStep(
         name="CheckModelBiasAndExplainability",

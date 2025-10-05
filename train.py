@@ -32,7 +32,7 @@ def run(args):
         train_df = pd.concat([train_df, val_df], ignore_index=True)
         logging.info(f"Combined dataset shape: {train_df.shape}")
 
-    X_train, y_train = train_df.drop("co2", axis=1), train_df["co2"]
+    X_train, y_train = train_df.drop("CO2_PPM", axis=1), train_df["CO2_PPM"]
 
     # Configure and train the XGBoost model
     model = xgb.XGBRegressor(

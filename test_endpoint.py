@@ -28,11 +28,16 @@ def main():
 
     # --- Prepare a Sample Payload ---
     # The payload must be a CSV string with the same number of features the model was trained on.
-    # The features are defined by the `preprocess.py` script. This is an example payload.
-    # The order of features must match the training data.
-    # Example features: temperature, occupancy, lag features, rolling means, etc.
-    # This example has 20 features.
-    sample_payload = "22.5,3,22.1,3,21.8,2,22.2,3.1,22.0,3.0,22.16,0.25,22.1,0.2,14,4,21.9,3.5,22.0,3.2"
+    # The features are defined by the `preprocess.py` script. This example payload
+    # has been updated to include the new Temperature feature and its derivatives.
+    # The order of features must match the columns in the data from preprocess.py.
+    # Example: Occupancy, Temperature, Air_Exchanges, Last_Vent_Maint, CO2_lag_1, Temp_lag_1, etc.
+    sample_payload = (
+        "5,22.5,3.1,45,"  # Original features
+        "850,22.4,4,840,22.2,5,830,22.0,3,"  # Lag features for CO2, Temp, Occupancy
+        "845.0,0.5,22.3,0.2,"  # Rolling features for CO2, Temp
+        "14,4"  # Time-based features (hour, day_of_week)
+    )
     
     print(f"\n🚀 Sending payload:\n{sample_payload}")
 

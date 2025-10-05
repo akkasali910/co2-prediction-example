@@ -24,7 +24,7 @@ def run(args):
 
     # Load test data
     test_df = pd.read_parquet(os.path.join(args.test_data, "test.parquet"))
-    X_test, y_test = test_df.drop("co2", axis=1), test_df["co2"]
+    X_test, y_test = test_df.drop("CO2_PPM", axis=1), test_df["CO2_PPM"]
 
     # Make predictions
     predictions = model.predict(X_test)

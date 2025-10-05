@@ -1,3 +1,4 @@
+%%writefile preprocess.py
 """
 This script performs data preparation and feature engineering for the CO2 regression model.
 It is designed to be run as a SageMaker Processing Job.
