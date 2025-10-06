@@ -1,4 +1,4 @@
-# Pando2 CO2 Prediction Project: Workflow and Script Guide
+# CO2 Prediction Project: Workflow and Script Guide
 
 This document provides a comprehensive overview of the files in this project and a step-by-step guide on how to run the end-to-end MLOps workflow.
 
