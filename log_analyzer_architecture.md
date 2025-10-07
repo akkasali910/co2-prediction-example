@@ -1,53 +1,39 @@
-# Architecture Diagram: Local RAG with Streamlit
+# Architecture Diagram: Decoupled RAG Application
 
-This diagram illustrates the architecture of the `log_analyzer_app.py` Streamlit application. It shows the flow for both indexing local files and answering user queries using a local RAG (Retrieval-Augmented Generation) pipeline.
+This diagram illustrates the refactored client-server architecture of the RAG application. It separates the one-time indexing process from the live query-and-answer workflow.
+
+![RAG Application Architecture](log_analyzer_architecture.png)
 
 ```mermaid
 graph LR
-    subgraph "User Interface (Streamlit)"
-        direction LR
-        UI_Sidebar[<br><b>Sidebar Controls</b><br>Load Directory<br>Upload Files]
-        UI_Chat[<br><b>Chat Interface</b><br>Ask Questions<br>View Responses]
-    end
-
-    subgraph "Local File System"
-        direction LR
-        FS[Project Directory]
-        Uploads[Uploaded Files]
-    end
-
-    subgraph "RAG Engine (Cached in Memory via @st.cache_resource)"
+    subgraph "One-Time Setup (Indexing)"
         direction TB
-        Setup["setup_rag_engine()"]
-        Update["update_index_with_uploads()"]
-        
-        subgraph "Core Components"
-            direction LR
-            Loader(SimpleDirectoryReader)
-            Embed(HuggingFace<br>Embedding Model)
-            LLM(Ollama<br>'tinyllama')
-            VS(ChromaVectorStore<br><i>In-Memory</i>)
-            QE(Query Engine)
-        end
+        Admin([👤 Admin/Developer]) -- "1. Runs script" --> BuildIndex["<b>build_index.py</b>"]
+        BuildIndex -- "Reads files from" --> LocalFS["Local File System"]
+        BuildIndex -- "Creates/Updates" --> PersistentDB[(<br><b>Persistent ChromaDB</b><br>on disk)]
     end
 
-    User([👤 User]) --> UI_Sidebar
-    User --> UI_Chat
+    subgraph "Live System (Querying)"
+        direction TB
+        
+        subgraph "Backend: Retrieval Service"
+            MCPServer["<b>MCP Server</b><br>(local_mcp_server.py)"]
+            MCPServer -- "Loads index from" --> PersistentDB
+        end
 
-    UI_Sidebar -- "1a. Click 'Load & Index'" --> Setup
-    Setup -- "Reads files from" --> FS
-    Setup -- "Builds Index in" --> VS
-    Setup -- "Creates" --> QE
+        subgraph "Client Application"
+            direction LR
+            ClientApp["<b>Streamlit App / Console App</b><br>(log_analyzer_app.py)"]
+            LocalLLM(Ollama LLM<br>'tinyllama')
+        end
 
-    UI_Sidebar -- "1b. Upload & Click 'Add Files'" --> Update
-    Update -- "Reads files from" --> Uploads
-    Update -- "Inserts new nodes into" --> VS
-
-    UI_Chat -- "2. Asks a question" --> QE
-    QE -- "3. Retrieves context from" --> VS
-    QE -- "4. Augments prompt and sends to" --> LLM
-    LLM -- "5. Streams response back to" --> QE
-    QE -- "6. Displays response in" --> UI_Chat
+        User([👤 User]) -- "2. Asks question in UI" --> ClientApp
+        ClientApp -- "3. Sends query via HTTP" --> MCPServer
+        MCPServer -- "4. Returns context" --> ClientApp
+        ClientApp -- "5. Augments prompt and sends to" --> LocalLLM
+        LocalLLM -- "6. Streams response back to" --> ClientApp
+        ClientApp -- "7. Displays response to" --> User
+    end
 ```
 
 ---

@@ -1,118 +1,53 @@
 import os
 import sys
-from pathlib import Path
-import torch
+import requests
+import json
 
 # --- LlamaIndex Imports ---
-from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings
+from llama_index.core import Settings
 from llama_index.llms.ollama import Ollama
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.core.storage.storage_context import StorageContext
-from llama_index.vector_stores.chroma import ChromaVectorStore
-# IMPORTANT: Use chromadb.Client for in-memory, non-persistent storage
-# This avoids "read-only database" errors in restricted environments.
-import chromadb
 
-# --- Configuration (Max Speed Priority) ---
+# --- Disable Telemetry/Warnings ---
+os.environ["LLAMA_INDEX_DO_NOT_TRACK"] = "true"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# --- Configuration ---
 OLLAMA_MODEL = "tinyllama" 
 OLLAMA_REQUEST_TIMEOUT = 300.0 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-ALLOWED_EXTENSIONS = [".log", ".txt", ".py", ".md"]
-TOP_K_CHUNKS = 1
+MCP_SERVER_URL = "http://127.0.0.1:5001/mcp/v1/get_model_context"
 # ------------------------------------------
 
-def setup_rag_engine():
-    """Initializes and configures the LlamaIndex RAG pipeline, prioritizing GPU usage and memory stability."""
-    
-    # Determine the device for PyTorch (used by HuggingFace Embeddings)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"\n--- 1. Initializing Embeddings on Device: {device.upper()} ---")
+def setup_llm():
+    """Initializes the local Ollama LLM."""
     
     try:
-        # 1. Initialize Embeddings (HuggingFace) and force it to use CUDA if available
-        embed_model = HuggingFaceEmbedding(
-            model_name=EMBEDDING_MODEL_NAME,
-            device=device
+        print("\n--- 1. Initializing Ollama (tinyllama) ---")
+        # Initialize LLM (Ollama)
+        llm = Ollama(
+            model=OLLAMA_MODEL,
+            request_timeout=OLLAMA_REQUEST_TIMEOUT,
+            max_tokens=512, # Limit response length to prevent rambling
+            stop_sequences=["\nUser:", "\n\n"], # Stop if it tries to start a new turn or repeats
+            temperature=0.1 # Make the output more deterministic and less prone to repetition
         )
-        print("✅ Embeddings initialized successfully.")
-    except Exception as e:
-        print(f"❌ Error initializing HuggingFace Embeddings. Check PyTorch/CUDA installation. Error: {e}")
-        sys.exit(1)
-
-    print("\n--- 2. Initializing Ollama (tinyllama) ---")
-    try:
-        # 2. Initialize LLM (Ollama) - Ollama handles its own GPU configuration
-        llm = Ollama(model=OLLAMA_MODEL, request_timeout=OLLAMA_REQUEST_TIMEOUT) 
-        llm.complete("Hi", max_tokens=1) # Test call to verify model access
-        
-        Settings.llm = llm
-        Settings.embed_model = embed_model
-        
+        llm.complete("Hi", max_tokens=1) # Test call
         print(f"✅ Ollama LLM '{OLLAMA_MODEL}' initialized successfully.")
+        return llm
     except Exception as e:
         print(f"❌ Ollama ERROR: Model '{OLLAMA_MODEL}' not accessible or server not running.")
         print(f"   Action: Ensure 'ollama serve' is running and you have pulled the model using: 'ollama pull {OLLAMA_MODEL}'")
         sys.exit(1)
-        
-    print("\n--- 3. Reading Directory Files ---")
-    # 3. Document Loading
-    try:
-        # The reader is still relative to the current working directory
-        reader = SimpleDirectoryReader(
-            input_dir=".", 
-            required_exts=ALLOWED_EXTENSIONS,
-            recursive=True
-        )
-        documents = reader.load_data()
-        
-        if not documents:
-            print(f"⚠️ No files found in the current directory with extensions: {", ".join(ALLOWED_EXTENSIONS)}.")
-            sys.exit(0)
-            
-        indexed_files = [Path(doc.metadata['file_path']).name for doc in documents]
-        print(f"✅ Found and loaded {len(indexed_files)} files: {', '.join(indexed_files)}")
-            
-    except Exception as e:
-        print(f"❌ Error reading directory files: {e}")
-        sys.exit(1)
-
-    print("\n--- 4. Building Vector Index (IN-MEMORY ChromaDB) ---")
-    # 4. Vector Store Setup (IN-MEMORY ChromaDB)
-    # Using chromadb.Client() for in-memory, avoiding file permission errors.
-    db_client = chromadb.Client()
-    chroma_collection = db_client.get_or_create_collection("directory_analysis_collection")
-    vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
-
-    # 5. Build Index
-    index = VectorStoreIndex.from_documents(documents, storage_context=storage_context)
-    print("✅ Index built in memory.")
-
-    # 6. Setup Query Engine
-    system_prompt = (
-        "You are an expert file analyzer. Your task is to analyze the provided file "
-        "snippets and answer the user's question concisely. The file snippets are prefixed "
-        "with their original filename for context. "
-        "Only use the information from the file content provided in the context. "
-        "If the answer is not in the context, state that you cannot find the answer in the provided files."
-    )
-    
-    query_engine = index.as_query_engine(
-        system_prompt=system_prompt,
-        similarity_top_k=TOP_K_CHUNKS, 
-        streaming=True
-    )
-    
-    return query_engine
 
 def analyze_console():
-    """Main console loop for querying the RAG engine."""
+    """Main console loop for querying the MCP server and generating answers."""
     
-    query_engine = setup_rag_engine()
+    llm = setup_llm()
     
     print("\n=======================================================")
-    print("      Directory Analyzer is READY (MAX SPEED)")
+    print("      Directory Analyzer is READY (Client Mode)")
     print("=======================================================")
+    print(f"   - Ensure the MCP server is running.")
     print("   Enter your query or type 'exit' or 'quit' to end.")
     print("=======================================================\n")
     
@@ -128,13 +63,40 @@ def analyze_console():
                 continue
 
             print("\n🤖 AI Response (Streaming):")
+
+            # 1. Retrieve context from the MCP server
+            try:
+                print("   (Retrieving context from MCP server...)", end="\r")
+                headers = {'Content-Type': 'application/json'}
+                payload = json.dumps({"user_text": user_query})
+                response = requests.post(MCP_SERVER_URL, headers=headers, data=payload)
+                response.raise_for_status()
+                
+                context_items = response.json().get("context_items", [])
+                context_string = "\n\n".join([item['content'] for item in context_items])
+                print("                                           ", end="\r") # Clear the line
+            except requests.exceptions.RequestException as e:
+                print(f"\n❌ Error: Could not connect to MCP server at {MCP_SERVER_URL}.")
+                print(f"   Please ensure 'local_mcp_server.py' is running. Details: {e}")
+                continue
             
-            # Use query() which returns a streamable response object
-            response_stream = query_engine.query(user_query)
+            # 2. Build a new prompt with the retrieved context
+            final_prompt = (
+                "You are an expert file analyzer. Use the following context to answer the user's query. "
+                "Only use the information from the provided context. If the answer is not in the context, "
+                "state that you cannot find the answer in the provided files.\n\n"
+                "--- CONTEXT ---\n"
+                f"{context_string}\n"
+                "--- END CONTEXT ---\n\n"
+                f"User Query: {user_query}"
+            )
+
+            # 3. Stream the final answer from the local LLM
+            response_stream = llm.stream_complete(final_prompt)
 
             # Iterate over the tokens in the response stream
-            for token in response_stream.response_gen:
-                print(token, end="", flush=True)
+            for token in response_stream:
+                print(token.delta, end="", flush=True)
 
             print("\n-------------------------------------------------------\n")
             
@@ -151,4 +113,3 @@ def analyze_console():
 
 if __name__ == '__main__':
     analyze_console()
-
