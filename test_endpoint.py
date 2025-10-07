@@ -11,7 +11,7 @@ def main():
     Invokes the SageMaker endpoint and prints the result.
     """
     # --- Configuration ---
-    endpoint_name = "pando2-co2-prediction-endpoint"
+    endpoint_name = "co2-prediction-endpoint"
     
     # --- Create a Predictor object ---
     # The sagemaker.Predictor object provides a high-level interface for inference.

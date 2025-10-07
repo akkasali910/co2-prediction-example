@@ -45,7 +45,7 @@ def handler(event, context):
     data_capture_config = {
         'EnableCapture': True,
         'InitialSamplingPercentage': 100,
-        'DestinationS3Uri': f"s3://{s3_bucket}/pando2/monitoring/data-capture",
+        'DestinationS3Uri': f"s3://{s3_bucket}/monitoring/data-capture",
         'CaptureOptions': [
             {'CaptureMode': 'Input'},
             {'CaptureMode': 'Output'}

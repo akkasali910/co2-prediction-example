@@ -19,7 +19,7 @@ def get_cleanup_pipeline(role, pipeline_name, lambda_cleanup_arn):
     # You can override the default value when you start a pipeline execution.
     endpoint_name_param = ParameterString(
         name="EndpointName",
-        default_value="pando2-co2-prediction-endpoint",
+        default_value="co2-prediction-endpoint",
     )
 
     # Define the Lambda step that will execute the cleanup logic.

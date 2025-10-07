@@ -36,9 +36,9 @@ def main():
 
     # --- S3 Data Locations (Update with your actual paths) ---
     # This assumes you have already run a processing job like in your pipeline
-    train_s3_path = f"s3://{default_bucket}/pando2/co2-output/train"
-    validation_s3_path = f"s3://{default_bucket}/pando2/co2-output/validation"
-    output_path = f"s3://{default_bucket}/pando2/hpo-output"
+    train_s3_path = f"s3://{default_bucket}/co2-output/train"
+    validation_s3_path = f"s3://{default_bucket}/co2-output/validation"
+    output_path = f"s3://{default_bucket}/hpo-output"
 
     # --- Base Estimator ---
     # This is the XGBoost estimator that the tuner will use for each training job.

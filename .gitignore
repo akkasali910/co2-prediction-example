@@ -40,3 +40,6 @@ env/
 
 # Log files
 *.log
+
+# vector storage
+chroma_db_index

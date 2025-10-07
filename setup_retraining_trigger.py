@@ -25,7 +25,7 @@ def main():
     pipeline_starter_lambda_arn = "arn:aws:lambda:YOUR_REGION:YOUR_ACCOUNT_ID:function:sagemaker-pipeline-starter"
     
     # This should match the schedule name from setup_model_monitor.py
-    monitor_schedule_name = "pando2-co2-monitor-schedule"
+    monitor_schedule_name = "co2-monitor-schedule"
     # -------------------
 
     sns_client = boto3.client("sns")

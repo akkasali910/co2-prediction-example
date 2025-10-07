@@ -49,13 +49,13 @@ def get_pipeline(role, pipeline_name, default_bucket):
     # --- Step 1: Data Preparation ---
     sklearn_processor = SKLearnProcessor(
         framework_version="1.2-1", role=role, instance_type=processing_instance_type, instance_count=1,
-        base_job_name="pando2-co2-data-prep"
+        base_job_name="co2-data-prep"
     )
     step_prepare_data = ProcessingStep(
         name="PrepareCO2Data",
         processor=sklearn_processor,
         code="scripts/preprocess.py",
-        inputs=[sagemaker.inputs.ProcessingInput(source=f"s3://{default_bucket}/pando2/input/", destination="/opt/ml/processing/input")],
+        inputs=[sagemaker.inputs.ProcessingInput(source=f"s3://{default_bucket}/input/", destination="/opt/ml/processing/input")],
         outputs=[
             sagemaker.outputs.ProcessingOutput(output_name="train", source="/opt/ml/processing/output/train"),
             sagemaker.outputs.ProcessingOutput(output_name="validation", source="/opt/ml/processing/output/validation"),
@@ -75,7 +75,7 @@ def get_pipeline(role, pipeline_name, default_bucket):
     data_quality_check_config = DataQualityCheckConfig(
         baseline_dataset=step_prepare_data.properties.ProcessingOutputConfig.Outputs["train"].S3Output.S3Uri,
         dataset_format=sagemaker.model_monitor.dataset_format.DatasetFormat.csv(header=False),
-        output_s3_uri=f"s3://{default_bucket}/pando2/monitoring/data-quality"
+        output_s3_uri=f"s3://{default_bucket}/monitoring/data-quality"
     )
     step_data_quality_check = QualityCheckStep(
         name="CheckDataQuality",
@@ -91,7 +91,7 @@ def get_pipeline(role, pipeline_name, default_bucket):
         role=role,
         instance_count=1,
         instance_type=training_instance_type,
-        output_path=f"s3://{default_bucket}/pando2/co2-output/training",
+        output_path=f"s3://{default_bucket}/co2-output/training",
     )
     
     hyperparameter_ranges = {
@@ -162,7 +162,7 @@ def get_pipeline(role, pipeline_name, default_bucket):
     # for different occupancy levels.
     clarify_data_config = DataConfig(
         s3_data_input_path=step_prepare_data.properties.ProcessingOutputConfig.Outputs["train"].S3Output.S3Uri,
-        s3_output_path=f"s3://{default_bucket}/pando2/clarify-output",
+        s3_output_path=f"s3://{default_bucket}/clarify-output",
         label="CO2_PPM", # The target variable, matching preprocess.py
         headers=[f"feature_{i}" for i in range(num_features)] + ["CO2_PPM"], # Use dynamic feature count
         dataset_type="text/csv",
@@ -284,7 +284,7 @@ def get_pipeline(role, pipeline_name, default_bucket):
         lambda_func_arn="arn:aws:lambda:YOUR_REGION:YOUR_ACCOUNT_ID:function:sagemaker-deploy-function", # <-- IMPORTANT: UPDATE THIS ARN
         inputs={
             "model_package_arn": step_register_model.properties.ModelPackageArn,
-            "endpoint_name": "pando2-co2-prediction-endpoint",
+            "endpoint_name": "co2-prediction-endpoint",
             "role_arn": role,
             "instance_type": "ml.m5.large",
             "s3_bucket": default_bucket, # Pass the bucket name
@@ -301,7 +301,7 @@ def get_pipeline(role, pipeline_name, default_bucket):
         name="CleanupOldEndpoint",
         lambda_func_arn="arn:aws:lambda:YOUR_REGION:YOUR_ACCOUNT_ID:function:sagemaker-cleanup-function", # <-- IMPORTANT: UPDATE THIS ARN
         inputs={
-            "endpoint_name": "pando2-co2-prediction-endpoint",
+            "endpoint_name": "co2-prediction-endpoint",
         },
     )
 

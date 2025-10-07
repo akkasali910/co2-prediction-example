@@ -18,7 +18,7 @@ def main():
     email_address = "your-email@example.com"
     
     # This should match the schedule name from setup_model_monitor.py
-    monitor_schedule_name = "pando2-co2-monitor-schedule" 
+    monitor_schedule_name = "co2-monitor-schedule" 
     
     # Use your AWS region
     aws_region = boto3.Session().region_name
