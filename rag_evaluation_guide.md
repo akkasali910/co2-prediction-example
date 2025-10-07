@@ -1,0 +1,137 @@
+# RAG Application Evaluation Guide
+
+This document provides a guide on how to improve the quality of responses from your RAG application and how to systematically evaluate its performance.
+
+---
+
+## 1. How to Improve Response Correctness
+
+Getting correct responses from a RAG system, especially with a small model like `tinyllama`, depends heavily on the quality of the information you provide it. The core principle is: **Garbage In, Garbage Out**.
+
+### A. Prompt Engineering (Controlling the 'G' in RAG)
+
+Your prompt is your primary tool for controlling the model's behavior. The current prompt in `log_analyzer.py` is a good start, but it can be made even more strict to reduce the chance of the model making things up (hallucinating).
+
+**Current Prompt:**
+```
+You are an expert file analyzer. Use the following context to answer the user's query.
+Only use the information from the provided context. If the answer is not in the context,
+state that you cannot find the answer in the provided files.
+```
+
+**Suggestion for a Stricter Prompt:**
+Add an explicit instruction to cite sources and a more forceful negative constraint.
+
+```
+You are an expert file analyzer. Your task is to answer the user's query based *only* on the provided context.
+
+--- CONTEXT ---
+{context_string}
+--- END CONTEXT ---
+
+When you answer, you MUST follow these rules:
+1.  Synthesize the information from the context to provide a concise answer.
+2.  If the answer is not found in the context, you MUST respond with the exact phrase: "I could not find an answer in the provided files." Do not add any other explanation.
+3.  Do not use any knowledge outside of the provided context.
+```
+
+### B. Retrieval Tuning (Improving the 'R' in RAG)
+
+The quality of your retrieval step is the most critical factor for success.
+
+1.  **Chunking Strategy**: The `SimpleDirectoryReader` in `build_index.py` uses a default chunking strategy. For analyzing code, this might not be optimal as it can split functions or classes in half.
+    *   **Future Improvement**: Consider using a `CodeSplitter` from LlamaIndex or LangChain, which is designed to split code based on syntax (e.g., keeping functions together).
+
+2.  **Number of Chunks (`TOP_K_CHUNKS`)**: In `local_mcp_server.py`, you have this set to `3`. This is a good starting point.
+    *   **Too Low (e.g., 1)**: The model gets very little context, leading to repetition or incomplete answers.
+    *   **Too High (e.g., 10)**: With a small model like `tinyllama`, too much context can be noisy and confusing. The model might get lost in the details.
+    *   **Recommendation**: For `tinyllama`, a `TOP_K_CHUNKS` value between 3 and 5 is usually the sweet spot.
+
+3.  **Embedding Model**: You are using `all-MiniLM-L6-v2`, which is a great general-purpose model. If you were analyzing a very specific domain (e.g., medical texts), you might explore specialized embedding models, but for code and logs, it's a solid choice.
+
+### C. Generation Tuning (The Language Model Itself)
+
+1.  **Model Choice**: Acknowledge the limitations of `tinyllama`. It's fast and lightweight, but not as powerful as larger models. If accuracy is paramount, testing a slightly larger model like `llama3.2:8b` or `phi3:medium` could provide a significant boost in reasoning quality. This is a classic trade-off between cost/speed and performance.
+
+2.  **Generation Parameters**: The parameters you've already set in `log_analyzer.py` are crucial for controlling the output.
+    *   `temperature=0.1`: Good. This makes the output more deterministic and factual.
+    *   `max_tokens=512`: Good. Prevents infinitely long, rambling responses.
+    *   `stop_sequences`: Good. Prevents the model from generating conversational turns.
+
+---
+
+## 2. How to Evaluate Your RAG Application
+
+Evaluation is not a one-time event; it's a continuous process. Here’s a practical framework for evaluating your system.
+
+### Step 1: Create an Evaluation Dataset
+
+You cannot evaluate without a "ground truth." Create a small set of question-answer pairs based on the files in your repository.
+
+**Example `evaluation_set.jsonl`:**
+```json
+{"question": "What is the purpose of the build_index.py script?", "ideal_answer": "The build_index.py script is responsible for reading local files, creating vector embeddings, and storing them in a persistent ChromaDB index on disk. It is a one-time setup step."}
+{"question": "Which language model is used in the Streamlit app?", "ideal_answer": "The Streamlit app (log_analyzer_app.py) uses the 'tinyllama' model via Ollama."}
+{"question": "How does the MCP server handle multiple queries?", "ideal_answer": "The MCP server can accept a 'user_texts' list. It retrieves context for all queries and then de-duplicates the results to provide a single, consolidated list of unique context items."}
+```
+
+### Step 2: Define Key RAG Metrics
+
+For a RAG system, "accuracy" is composed of several metrics:
+
+1.  **Faithfulness**: Does the answer generated by the LLM stay true to the provided context? (i.e., Is it free of hallucinations?)
+    *   **How to Measure**: Compare the generated answer against the retrieved context chunks. If the answer includes information not present in the context, it is unfaithful.
+
+2.  **Answer Relevancy**: Is the generated answer relevant to the user's original question?
+    *   **How to Measure**: Compare the generated answer against the user's question. Does it actually address what was asked?
+
+3.  **Context Relevancy**: Are the context chunks retrieved by the server actually relevant to the user's question?
+    *   **How to Measure**: This evaluates your retrieval step. For a given question, look at the context chunks returned by the MCP server. Are they useful for answering the question?
+
+### Step 3: Run the Evaluation
+
+You can create a simple Python script (`evaluate_rag.py`) to automate this.
+
+**Example `evaluate_rag.py` (Conceptual):**
+```python
+import requests
+import json
+
+# 1. Load your evaluation dataset
+with open("evaluation_set.jsonl", "r") as f:
+    eval_questions = [json.loads(line) for line in f]
+
+results = []
+for item in eval_questions:
+    question = item["question"]
+    ideal_answer = item["ideal_answer"]
+
+    # 2. Run your RAG pipeline (same logic as log_analyzer.py)
+    #   a. Call MCP server to get context
+    #   b. Call LLM with context + question to get generated_answer
+    
+    retrieved_context = # ... (call MCP server)
+    generated_answer = # ... (call LLM)
+
+    # 3. Store results for review
+    results.append({
+        "question": question,
+        "ideal_answer": ideal_answer,
+        "retrieved_context": retrieved_context,
+        "generated_answer": generated_answer
+    })
+
+# 4. Save results to a file for manual or automated review
+with open("evaluation_results.json", "w") as f:
+    json.dump(results, f, indent=2)
+```
+
+### Step 4: Review the Results
+
+Go through the `evaluation_results.json` file and score each result (e.g., on a scale of 1-5) for Faithfulness, Answer Relevancy, and Context Relevancy. This will give you a clear picture of where your system is failing.
+
+-   If **Context Relevancy** is low, you need to improve your retrieval (e.g., better chunking, different `TOP_K`).
+-   If **Faithfulness** is low, you need to improve your prompt or use a better model that is less prone to hallucination.
+-   If **Answer Relevancy** is low, the model might be getting distracted by the context. A better prompt can help here too.
+
+By following this structured approach, you can move from "it seems to work" to "I have data showing that my RAG system is X% faithful and Y% relevant," which is essential for building trust and improving your application.
