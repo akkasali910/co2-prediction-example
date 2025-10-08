@@ -1,6 +1,6 @@
 import os
 import sys
-
+import re
 # --- LlamaIndex Imports ---
 from llama_index.core import VectorStoreIndex, Settings
 from llama_index.core.query_engine import RetrieverQueryEngine
@@ -11,6 +11,7 @@ import chromadb
 
 # --- Local Imports ---
 from llama_index.core.chat_engine import ContextChatEngine
+from guardrails import Guardrails
 from config import (OLLAMA_MODEL, OLLAMA_REQUEST_TIMEOUT, EMBEDDING_MODEL_NAME, 
                     CHROMA_PERSIST_DIR, TOP_K_CHUNKS)
 
@@ -77,6 +78,7 @@ def setup_chat_engine():
 def analyze_console():
     """Main console loop for chatting about the local index."""
     chat_engine = setup_chat_engine()
+    guardrails = Guardrails()
     try:
         print("\n=======================================================")
         print("      Directory Analyzer is READY (Conversational Mode)")
@@ -94,6 +96,13 @@ def analyze_console():
             if not user_query.strip():
                 continue
 
+            # --- Input Guardrail Check ---
+            is_safe, message = guardrails.check_input(user_query)
+            if not is_safe:
+                print(f"\nGUARDRAIL: {message}")
+                print("-------------------------------------------------------\n")
+                continue
+
             print("\n🤖 AI Response (Streaming):")
             
             if user_query.strip().lower() == 'reset':
@@ -105,8 +114,9 @@ def analyze_console():
             # Use the stream_chat() method which returns a StreamingResponse object
             streaming_response = chat_engine.stream_chat(user_query)
 
-            for token in streaming_response.response_gen:
-                print(token, end="", flush=True)
+            # --- Output Guardrail Processing ---
+            for sanitized_token in guardrails.stream_and_sanitize(streaming_response):
+                print(sanitized_token, end="", flush=True)
 
             print("\n-------------------------------------------------------\n")
             

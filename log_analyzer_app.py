@@ -1,12 +1,14 @@
 import streamlit as st
 import os
 import sys
-import requests
-import json
-
+import re
 # --- LlamaIndex Imports ---
-from llama_index.core import Settings
+from llama_index.core import VectorStoreIndex, Settings
+from llama_index.core.chat_engine import ContextChatEngine
 from llama_index.llms.ollama import Ollama
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index.vector_stores.chroma import ChromaVectorStore
+import chromadb
 
 # --- Disable LlamaIndex Telemetry ---
 os.environ["LLAMA_INDEX_DO_NOT_TRACK"] = "true"
@@ -14,65 +16,102 @@ os.environ["LLAMA_INDEX_DO_NOT_TRACK"] = "true"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # --- Configuration (Max Speed Priority) ---
-OLLAMA_MODEL = "tinyllama"
-OLLAMA_REQUEST_TIMEOUT = 300.0
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-MCP_SERVER_URL = "http://127.0.0.1:5001/mcp/v1/get_model_context"
+from guardrails import Guardrails
+from config import (OLLAMA_MODEL, OLLAMA_REQUEST_TIMEOUT, EMBEDDING_MODEL_NAME, 
+                    CHROMA_PERSIST_DIR, TOP_K_CHUNKS)
 # ------------------------------------------
 
-@st.cache_resource(show_spinner="Initializing LLM...")
-def setup_llm():
+@st.cache_resource(show_spinner="Initializing RAG Engine...")
+def setup_chat_engine():
     """
-    Initializes and caches the local Ollama LLM.
+    Initializes and caches the LlamaIndex chat engine.
     This function will only run once per session.
     """
-    st.info(f"Initializing Ollama model: **{OLLAMA_MODEL}**")
+    st.info(f"1. Initializing Ollama model: **{OLLAMA_MODEL}**")
     try:
-        # Initialize LLM (Ollama)
         llm = Ollama(
             model=OLLAMA_MODEL,
             request_timeout=OLLAMA_REQUEST_TIMEOUT,
-            max_tokens=512, # Limit response length to prevent rambling
-            stop_sequences=["\nUser:", "\n\n"], # Stop if it tries to start a new turn or repeats
-            temperature=0.1 # Make the output more deterministic and less prone to repetition
+            max_tokens=512,
+            stop_sequences=["\nUser:", "\n\n"],
+            temperature=0.1
         )
         llm.complete("Hi", max_tokens=1)  # Test call
-        st.success(f"✅ Ollama LLM '{OLLAMA_MODEL}' is ready!")
-        return llm
+        st.info(f"2. Initializing Retriever from local index...")
+        Settings.embed_model = HuggingFaceEmbedding(model_name=EMBEDDING_MODEL_NAME)
+        Settings.llm = llm
+
+        db = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
+        chroma_collection = db.get_or_create_collection("directory_analysis_collection")
+        vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+        index = VectorStoreIndex.from_vector_store(vector_store=vector_store)
+
+        retriever = index.as_retriever(similarity_top_k=TOP_K_CHUNKS)
+
+        st.info(f"3. Initializing Chat Engine...")
+        system_prompt = (
+            "You are an expert file analyzer. Your task is to answer the user's questions based on the provided context. "
+            "The context is retrieved from a local directory of files. "
+            "Always be helpful and answer concisely. If the answer is not in the context, "
+            "state that you cannot find the answer in the provided files. "
+            "You have access to the conversation history."
+        )
+        chat_engine = ContextChatEngine.from_defaults(retriever=retriever, llm=llm, system_prompt=system_prompt)
+        st.success("✅ RAG Engine is ready!")
+        return chat_engine
+
     except Exception as e:
-        st.error(f"Ollama Connection Error: Could not connect to the '{OLLAMA_MODEL}' model. Please ensure Ollama is running and the model is pulled.")
+        st.error(f"Initialization Error: {e}")
+        st.warning("Please ensure 'ollama serve' is running and you have run 'python build_index.py' first.")
         return None
 
 def main():
     """Main Streamlit application logic."""
     st.set_page_config(page_title="Directory Analyzer", layout="wide")
 
-    st.title("📄 Directory Content Analyzer (Client Mode)")
+    st.title("📄 Directory Content Analyzer (Conversational Mode)")
     st.markdown(f"Powered by LlamaIndex, Ollama (`{OLLAMA_MODEL}`), and Streamlit.")
 
     # --- Sidebar for status and instructions ---
     with st.sidebar:
         st.header("Setup Instructions")
         st.info(
-            "This application acts as a client. Before using it, please ensure:\n\n"
-            "1. **The MCP Server is running**.\n   - Run `python local_mcp_server.py --port 5001` in a separate terminal.\n\n"
-            "2. **The Vector Index is built**.\n   - Run `python build_index.py` if you haven't already.\n\n"
-            "3. **Ollama is running** with the `{OLLAMA_MODEL}` model."
+            "This application runs in local mode. Please ensure:\n\n"
+            "1. **The Vector Index is built**.\n   - Run `python build_index.py` if you haven't already.\n\n"
+            "2. **Ollama is running** with the `{OLLAMA_MODEL}` model."
         )
+
+        st.divider()
+        st.header("Chat Controls")
+        if st.button("Clear Chat History"):
+            # Reset the chat engine's internal state
+            if chat_engine:
+                chat_engine.reset()
+            # Clear the UI message history and the engine's history stored in session state
+            st.session_state.messages = [{"role": "assistant", "content": "Hello! I'm ready to answer questions about the files in this directory."}]
+            if 'chat_engine_history' in st.session_state:
+                del st.session_state.chat_engine_history
+            
+            st.success("Chat history cleared!")
+            # Rerun the app to reflect the cleared state
+            st.rerun()
 
     # --- Setup RAG Engine ---
     # This will run on the first load and the result is cached.
-    llm = setup_llm()
+    chat_engine = setup_chat_engine()
+    guardrails = Guardrails()
 
     st.divider()
 
-    if llm is None:
-        st.warning("LLM not initialized. Please check the Ollama connection error above.")
+    if chat_engine is None:
+        st.warning("Application is not ready. Please check the errors above.")
         return
 
     # --- Chat Interface ---
     if "messages" not in st.session_state:
-        st.session_state.messages = [{"role": "assistant", "content": "Hello! I'm ready to analyze the files in this directory. What would you like to know?"}]
+        st.session_state.messages = [{"role": "assistant", "content": "Hello! I'm ready to answer questions about the files in this directory."}]
+        # Initialize the chat engine's history in session state
+        st.session_state.chat_engine_history = []
 
     # Display chat messages
     for message in st.session_state.messages:
@@ -80,51 +119,38 @@ def main():
             st.markdown(message["content"])
 
     # Get user input
-    if prompt := st.chat_input("Ask a question about the files...", disabled=(llm is None)):
+    if prompt := st.chat_input("Ask a question about the files...", disabled=(chat_engine is None)):
         # Add user message to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
+
+        # --- Input Guardrail Check ---
+        is_safe, message = guardrails.check_input(prompt)
+        if not is_safe:
+            with st.chat_message("assistant"):
+                st.error(f"GUARDRAIL: {message}")
+            st.session_state.messages.append({"role": "assistant", "content": f"GUARDRAIL: {message}"})
+            return
 
         # Display assistant response
         with st.chat_message("assistant"):
             response_placeholder = st.empty()
             full_response = ""
             try:
-                # 1. Retrieve context from the MCP server
-                with st.spinner("Retrieving context from MCP server..."):
-                    headers = {'Content-Type': 'application/json'}
-                    payload = json.dumps({"user_text": prompt})
-                    response = requests.post(MCP_SERVER_URL, headers=headers, data=payload, timeout=60)
-                    response.raise_for_status()
-                    
-                    context_items = response.json().get("context_items", [])
-                    context_string = "\n\n".join([item['content'] for item in context_items])
+                with st.spinner("Thinking..."):
+                    # Use the chat engine to get a streaming response
+                    streaming_response = chat_engine.stream_chat(prompt, chat_history=st.session_state.chat_engine_history)
 
-                # 2. Build a new prompt with the retrieved context
-                final_prompt = (
-                    "You are an expert file analyzer. Use the following context to answer the user's query. "
-                    "Only use the information from the provided context. If the answer is not in the context, "
-                    "state that you cannot find the answer in the provided files.\n\n"
-                    "--- CONTEXT ---\n"
-                    f"{context_string}\n"
-                    "--- END CONTEXT ---\n\n"
-                    f"User Query: {prompt}"
-                )
-
-                # 3. Stream the final answer from the local LLM
-                response_stream = llm.stream_complete(final_prompt)
-
-                for token in response_stream:
-                    full_response += token.delta
+                # --- Output Guardrail Processing ---
+                for token in guardrails.stream_and_sanitize(streaming_response):
+                    full_response += token
                     response_placeholder.markdown(full_response + "▌")
                 
                 response_placeholder.markdown(full_response)
+                # Update the chat engine's history
+                st.session_state.chat_engine_history = chat_engine.chat_history
 
-            except requests.exceptions.RequestException as e:
-                error_message = f"Could not connect to MCP server at `{MCP_SERVER_URL}`. Please ensure it's running. Details: {e}"
-                st.error(error_message)
-                full_response = error_message
             except Exception as e:
                 error_message = f"An error occurred during query: {e}"
                 st.error(error_message)
