@@ -76,24 +76,32 @@ with st.sidebar:
         with st.spinner(f"Fetching all {total_items} items from ChromaDB..."):
             try:
                 all_data = collection.get(include=["metadatas", "documents"])
-                
-                # Prepare data for both formats
-                df = pd.DataFrame({
-                    "id": all_data["ids"],
-                    "document": all_data["documents"],
-                    "metadata": [json.dumps(m) for m in all_data["metadatas"]]
-                })
+
+                # --- Prepare data for Bulk API (NDJSON) ---
+                bulk_data_lines = []
+                for i, doc_id in enumerate(all_data["ids"]):
+                    # Action line for Bulk API
+                    action = {"index": {"_index": COLLECTION_NAME, "_id": doc_id}}
+                    bulk_data_lines.append(json.dumps(action))
+                    
+                    # Source document line
+                    source_doc = {
+                        "document": all_data["documents"][i],
+                        **all_data["metadatas"][i] # Unpack metadata directly
+                    }
+                    bulk_data_lines.append(json.dumps(source_doc))
+
+                bulk_ndjson = "\n".join(bulk_data_lines) + "\n"
+
                 st.session_state.export_data = {
-                    "csv": df.to_csv(index=False).encode('utf-8'),
-                    "json": df.to_json(orient='records', indent=2).encode('utf-8')
+                    "ndjson": bulk_ndjson.encode('utf-8')
                 }
                 st.success("Export file is ready to download below.")
             except Exception as e:
                 st.error(f"Failed to prepare export file: {e}")
 
     if st.session_state.export_data:
-        st.download_button("Download as CSV", data=st.session_state.export_data["csv"], file_name="chroma_collection.csv", mime="text/csv")
-        st.download_button("Download as JSON", data=st.session_state.export_data["json"], file_name="chroma_collection.json", mime="application/json")
+        st.download_button("Download as Bulk API file (.ndjson)", data=st.session_state.export_data["ndjson"], file_name="chroma_bulk_export.ndjson", mime="application/x-ndjson")
 
 
 # --- Tabs for different functionalities ---
