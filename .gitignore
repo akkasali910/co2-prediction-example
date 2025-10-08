@@ -1,45 +1,23 @@
-# Byte-compiled / optimized / DLL files
+# Vector Store Database
+# This is a local, generated directory and should not be committed.
+chroma_db_index/
+
+# Python virtual environment
+.venv/
+venv/
+
+# Python cache
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
 
-# C extensions
-*.so
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual Environments
-venv/
-env/
-.venv/
-.env
-
-# IDE / Editor
+# IDE specific files
 .vscode/
 .idea/
 
-# OS-specific
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# mac
 .DS_Store
-
-# Log files
-*.log
-
-# vector storage
-chroma_db_index

@@ -1,154 +1,131 @@
 import os
 import sys
-from pathlib import Path
-import torch
-
+import re
 # --- LlamaIndex Imports ---
-from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings
+from llama_index.core import VectorStoreIndex, Settings
+from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.llms.ollama import Ollama
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.core.storage.storage_context import StorageContext
 from llama_index.vector_stores.chroma import ChromaVectorStore
-# IMPORTANT: Use chromadb.Client for in-memory, non-persistent storage
-# This avoids "read-only database" errors in restricted environments.
 import chromadb
 
-# --- Configuration (Max Speed Priority) ---
-OLLAMA_MODEL = "tinyllama" 
-OLLAMA_REQUEST_TIMEOUT = 300.0 
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-ALLOWED_EXTENSIONS = [".log", ".txt", ".py", ".md"]
-TOP_K_CHUNKS = 1
-# ------------------------------------------
+# --- Local Imports ---
+from llama_index.core.chat_engine import ContextChatEngine
+from guardrails import Guardrails
+from config import (OLLAMA_MODEL, OLLAMA_REQUEST_TIMEOUT, EMBEDDING_MODEL_NAME, 
+                    CHROMA_PERSIST_DIR, TOP_K_CHUNKS)
 
-def setup_rag_engine():
-    """Initializes and configures the LlamaIndex RAG pipeline, prioritizing GPU usage and memory stability."""
-    
-    # Determine the device for PyTorch (used by HuggingFace Embeddings)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"\n--- 1. Initializing Embeddings on Device: {device.upper()} ---")
-    
+# --- Disable Telemetry/Warnings ---
+os.environ["LLAMA_INDEX_DO_NOT_TRACK"] = "true"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+def setup_chat_engine():
+    """Initializes the LlamaIndex chat engine."""
+    print("\n--- 1. Initializing Ollama LLM ---")
     try:
-        # 1. Initialize Embeddings (HuggingFace) and force it to use CUDA if available
-        embed_model = HuggingFaceEmbedding(
-            model_name=EMBEDDING_MODEL_NAME,
-            device=device
+        llm = Ollama(
+            model=OLLAMA_MODEL,
+            request_timeout=OLLAMA_REQUEST_TIMEOUT,
+            max_tokens=512,
+            stop_sequences=["\nUser:", "\n\n"],
+            temperature=0.1
         )
-        print("✅ Embeddings initialized successfully.")
-    except Exception as e:
-        print(f"❌ Error initializing HuggingFace Embeddings. Check PyTorch/CUDA installation. Error: {e}")
-        sys.exit(1)
-
-    print("\n--- 2. Initializing Ollama (tinyllama) ---")
-    try:
-        # 2. Initialize LLM (Ollama) - Ollama handles its own GPU configuration
-        llm = Ollama(model=OLLAMA_MODEL, request_timeout=OLLAMA_REQUEST_TIMEOUT) 
-        llm.complete("Hi", max_tokens=1) # Test call to verify model access
-        
-        Settings.llm = llm
-        Settings.embed_model = embed_model
-        
+        llm.complete("Hi", max_tokens=1) # Test call
         print(f"✅ Ollama LLM '{OLLAMA_MODEL}' initialized successfully.")
     except Exception as e:
         print(f"❌ Ollama ERROR: Model '{OLLAMA_MODEL}' not accessible or server not running.")
         print(f"   Action: Ensure 'ollama serve' is running and you have pulled the model using: 'ollama pull {OLLAMA_MODEL}'")
         sys.exit(1)
-        
-    print("\n--- 3. Reading Directory Files ---")
-    # 3. Document Loading
+
+    print("\n--- 2. Initializing Retriever from Local Index ---")
     try:
-        # The reader is still relative to the current working directory
-        reader = SimpleDirectoryReader(
-            input_dir=".", 
-            required_exts=ALLOWED_EXTENSIONS,
-            recursive=True
-        )
-        documents = reader.load_data()
-        
-        if not documents:
-            print(f"⚠️ No files found in the current directory with extensions: {", ".join(ALLOWED_EXTENSIONS)}.")
-            sys.exit(0)
-            
-        indexed_files = [Path(doc.metadata['file_path']).name for doc in documents]
-        print(f"✅ Found and loaded {len(indexed_files)} files: {', '.join(indexed_files)}")
-            
+        # Initialize Embeddings
+        Settings.embed_model = HuggingFaceEmbedding(model_name=EMBEDDING_MODEL_NAME)
+        Settings.llm = llm
+
+        # Load the persistent ChromaDB index
+        db = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
+        chroma_collection = db.get_or_create_collection("directory_analysis_collection")
+        vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+        index = VectorStoreIndex.from_vector_store(vector_store=vector_store)
+
+        # Create a retriever from the index
+        retriever = index.as_retriever(similarity_top_k=TOP_K_CHUNKS)
+        print("✅ Retriever initialized successfully.")
     except Exception as e:
-        print(f"❌ Error reading directory files: {e}")
+        print(f"❌ Failed to initialize retriever from '{CHROMA_PERSIST_DIR}'.")
+        print(f"   Action: Ensure you have run 'python build_index.py' first. Error: {e}")
         sys.exit(1)
 
-    print("\n--- 4. Building Vector Index (IN-MEMORY ChromaDB) ---")
-    # 4. Vector Store Setup (IN-MEMORY ChromaDB)
-    # Using chromadb.Client() for in-memory, avoiding file permission errors.
-    db_client = chromadb.Client()
-    chroma_collection = db_client.get_or_create_collection("directory_analysis_collection")
-    vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
-
-    # 5. Build Index
-    index = VectorStoreIndex.from_documents(documents, storage_context=storage_context)
-    print("✅ Index built in memory.")
-
-    # 6. Setup Query Engine
+    print("\n--- 3. Initializing LlamaIndex Chat Engine ---")
+    # Define a custom system prompt for the chat engine
     system_prompt = (
-        "You are an expert file analyzer. Your task is to analyze the provided file "
-        "snippets and answer the user's question concisely. The file snippets are prefixed "
-        "with their original filename for context. "
-        "Only use the information from the file content provided in the context. "
-        "If the answer is not in the context, state that you cannot find the answer in the provided files."
+        "You are an expert file analyzer. Your task is to answer the user's questions based on the provided context. "
+        "The context is retrieved from a local directory of files. "
+        "Always be helpful and answer concisely. If the answer is not in the context, "
+        "state that you cannot find the answer in the provided files. "
+        "You have access to the conversation history."
     )
     
-    query_engine = index.as_query_engine(
+    chat_engine = ContextChatEngine.from_defaults(
+        retriever=retriever,
+        llm=llm,
         system_prompt=system_prompt,
-        similarity_top_k=TOP_K_CHUNKS, 
-        streaming=True
     )
-    
-    return query_engine
+    print("✅ Chat Engine is ready.")
+    return chat_engine
 
 def analyze_console():
-    """Main console loop for querying the RAG engine."""
-    
-    query_engine = setup_rag_engine()
-    
-    print("\n=======================================================")
-    print("      Directory Analyzer is READY (MAX SPEED)")
-    print("=======================================================")
-    print("   Enter your query or type 'exit' or 'quit' to end.")
-    print("=======================================================\n")
-    
-    while True:
-        try:
+    """Main console loop for chatting about the local index."""
+    chat_engine = setup_chat_engine()
+    guardrails = Guardrails()
+    try:
+        print("\n=======================================================")
+        print("      Directory Analyzer is READY (Conversational Mode)")
+        print("=======================================================")
+        print("   - Using local LlamaIndex and ChromaDB index.")
+        print("   - Enter your query or type 'exit' or 'quit' to end. Type 'reset' to clear history.")
+        print("=======================================================\n")
+        
+        while True:
             user_query = input("❓ Your Query: ")
             
-            if user_query.lower() in ['exit', 'quit']:
-                print("👋 Exiting analyzer. Goodbye!")
+            if user_query.strip().lower() in ['exit', 'quit']:
                 break
             
             if not user_query.strip():
                 continue
 
+            # --- Input Guardrail Check ---
+            is_safe, message = guardrails.check_input(user_query)
+            if not is_safe:
+                print(f"\nGUARDRAIL: {message}")
+                print("-------------------------------------------------------\n")
+                continue
+
             print("\n🤖 AI Response (Streaming):")
             
-            # Use query() which returns a streamable response object
-            response_stream = query_engine.query(user_query)
+            if user_query.strip().lower() == 'reset':
+                chat_engine.reset()
+                print("Conversation history has been reset.")
+                print("-------------------------------------------------------\n")
+                continue
 
-            # Iterate over the tokens in the response stream
-            for token in response_stream.response_gen:
-                print(token, end="", flush=True)
+            # Use the stream_chat() method which returns a StreamingResponse object
+            streaming_response = chat_engine.stream_chat(user_query)
+
+            # --- Output Guardrail Processing ---
+            for sanitized_token in guardrails.stream_and_sanitize(streaming_response):
+                print(sanitized_token, end="", flush=True)
 
             print("\n-------------------------------------------------------\n")
             
-        except KeyboardInterrupt:
-            print("\n👋 Exiting analyzer. Goodbye!")
-            break
-        except Exception as e:
-            # We catch specific PyTorch errors related to memory/device to give better feedback
-            if "CUDA out of memory" in str(e):
-                 print("\n❌ Error: CUDA out of memory. Try closing other GPU applications or reducing context size.")
-            else:
-                print(f"\n❌ Error during query execution: {e}")
-                print("   Please ensure your Ollama server is running and accessible.")
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user.")
+    except Exception as e:
+        print(f"\n❌ An unexpected error occurred: {e}")
+    finally:
+        print("\n👋 Exiting analyzer. Goodbye!")
 
 if __name__ == '__main__':
     analyze_console()
-
