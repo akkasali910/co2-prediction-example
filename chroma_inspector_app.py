@@ -13,22 +13,19 @@ import umap  # Requires: pip install umap-learn scikit-learn
 # --- Configuration (from other project files) ---
 from config import CHROMA_PERSIST_DIR, EMBEDDING_MODEL_NAME
 
-COLLECTION_NAME = "directory_analysis_collection"
-
 # --- Streamlit Page Configuration ---
 st.set_page_config(page_title="ChromaDB Inspector", layout="wide")
 
 # --- Caching Functions ---
 
 @st.cache_resource(show_spinner="Connecting to ChromaDB...")
-def get_chroma_collection():
-    """Connects to the persistent ChromaDB and returns the collection object."""
+def get_chroma_client():
+    """Connects to the persistent ChromaDB and returns the client object."""
     try:
         db = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
-        collection = db.get_collection(name=COLLECTION_NAME)
-        return collection
+        return db
     except Exception as e:
-        st.error(f"Failed to connect to ChromaDB collection '{COLLECTION_NAME}' at '{CHROMA_PERSIST_DIR}'.")
+        st.error(f"Failed to connect to ChromaDB at '{CHROMA_PERSIST_DIR}'.")
         st.error(f"Error: {e}")
         st.warning("Please ensure you have run 'python build_index.py' first.")
         return None
@@ -47,17 +44,32 @@ def get_embedding_model():
 # --- Main Application ---
 
 st.title("🔬 ChromaDB Vector Store Inspector")
-st.markdown(f"Inspecting collection **`{COLLECTION_NAME}`** from path **`{CHROMA_PERSIST_DIR}`**")
 
-collection = get_chroma_collection()
+client = get_chroma_client()
 embed_model = get_embedding_model()
 
-if collection is None or embed_model is None:
+if client is None or embed_model is None:
     st.stop()
 
 # --- Sidebar ---
 with st.sidebar:
     st.header("Collection Info")
+    try:
+        collections = client.list_collections()
+        collection_names = [c.name for c in collections]
+        if not collection_names:
+            st.warning("No collections found in the database.")
+            st.stop()
+        
+        selected_collection_name = st.selectbox(
+            "Select a Collection to Inspect",
+            collection_names
+        )
+        collection = client.get_collection(name=selected_collection_name)
+    except Exception as e:
+        st.error(f"Failed to load collections: {e}")
+        st.stop()
+
     total_items = collection.count()
     st.metric("Total Items in Collection", total_items)
     st.info("This app allows you to browse the contents of the vector store and perform similarity searches.")
@@ -81,7 +93,7 @@ with st.sidebar:
                 bulk_data_lines = []
                 for i, doc_id in enumerate(all_data["ids"]):
                     # Action line for Bulk API
-                    action = {"index": {"_index": COLLECTION_NAME, "_id": doc_id}}
+                    action = {"index": {"_index": selected_collection_name, "_id": doc_id}}
                     bulk_data_lines.append(json.dumps(action))
                     
                     # Source document line
@@ -102,6 +114,9 @@ with st.sidebar:
 
     if st.session_state.export_data:
         st.download_button("Download as Bulk API file (.ndjson)", data=st.session_state.export_data["ndjson"], file_name="chroma_bulk_export.ndjson", mime="application/x-ndjson")
+
+# Update title with selected collection
+st.markdown(f"Inspecting collection **`{selected_collection_name}`** from path **`{CHROMA_PERSIST_DIR}`**")
 
 
 # --- Tabs for different functionalities ---
